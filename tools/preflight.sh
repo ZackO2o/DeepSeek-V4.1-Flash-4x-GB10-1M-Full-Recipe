@@ -18,7 +18,7 @@
 # Usage:  NODE_IPS="..." IMAGE=... PATCH_DIR=... ./preflight.sh
 set -u
 
-NODE_IPS=${NODE_IPS:?set NODE_IPS, e.g. "10.0.0.10 10.0.0.11 10.0.0.12 10.0.0.13"}
+NODE_IPS=${NODE_IPS:?set NODE_IPS, e.g. "<IP1> <IP2> <IP3> <IP4>"}
 IMAGE=${IMAGE:-}
 NCCL_DIR=${NCCL_DIR:-}
 PATCH_DIR=${PATCH_DIR:-}

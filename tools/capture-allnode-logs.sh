@@ -12,7 +12,7 @@
 # Rule: call this BEFORE any subsequent boot, i.e. immediately after your launcher
 # reports a failure.
 #
-#   NODE_IPS="10.0.0.10 10.0.0.11 ..." CONTAINER=vllm_dsv41 ./capture-allnode-logs.sh <tag>
+#   NODE_IPS="<IP1> <IP2> ..." CONTAINER=vllm_dsv41 ./capture-allnode-logs.sh <tag>
 #
 # Output: ./allnode-<tag>/rank<N>.log per rank + a filtered error summary on stdout.
 set -u
