@@ -40,3 +40,17 @@ This repository contains no credentials, no private addresses, no hostnames, no
 model weights and no operational secrets. Addresses in examples are placeholders
 (`<IP0>`, `<roce-iface>`, …). If you fork this and add your own numbers, check them
 before publishing.
+
+## Licence scope
+
+The MIT licence in `LICENSE` covers the original material of this repository:
+the documentation (`README.md`, `README.zh-CN.md`, `patches/README.md`,
+`NOTICE.md`), the scripts under `tools/`, and the re-derivation work in
+`patches/gpu_worker_cachefix.py` **excluding** the vLLM source it is based on.
+
+Third-party material keeps its own licence:
+
+* `patches/gpu_worker_cachefix.py` — modified vLLM source, **Apache-2.0**
+  (original `SPDX` headers preserved at the top of the file; do not remove them).
+* Model weights — DeepSeek's model licence (see the upstream model repository).
+* Everything else listed in the table above — its own upstream licence.
