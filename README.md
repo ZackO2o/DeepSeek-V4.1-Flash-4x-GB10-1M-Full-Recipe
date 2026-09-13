@@ -286,7 +286,8 @@ at the moments each configuration booted:
 | 0.80 | 300,000 | on | yes | 648,717 | 2.16× |
 | 0.80 | 600,000 | on | **boot failed** | — | — |
 | 0.82 | 600,000 | on | yes | 780,110 … 1,149,256 | 1.30× … 1.92× |
-| 0.83 | 1,048,576 | on | yes | **1,716,692** | **1.64×** |
+| 0.83 | 1,048,576 | on | yes | 1,484,371 … 1,716,692 | 1.42× … 1.64× |
+| **0.84** | 1,048,576 | on | yes | **1,700,113 … 1,870,320** | **1.62× … 1.78×** |
 | 0.83 | 1,048,576 | text-only, eager | no | 1,529,317 … 1,627,978 | 1.46× … 1.55× |
 
 Two conclusions we would have got wrong by reasoning instead of measuring:
@@ -325,6 +326,39 @@ A note on why the gates exist: during development we had a configuration that
 from the first token** — see §9. Throughput tables cannot detect that; gates can.
 
 ---
+
+### 6.7 Collective transport A/B and a negative result (2026-09-13)
+
+Full report: [`results/2026-09-13-transport-and-engram.md`](results/2026-09-13-transport-and-engram.md).
+Same four-node ring, same checkpoint and features, one variable at a time, baseline
+measured **twice** (single-run noise on this hardware is ±5–9 % per level):
+
+| metric | baseline run 1 | baseline run 2 | switchless transport |
+|---|---:|---:|---:|
+| C1 aggregate / per-stream tok/s | 43.26 / 48.91 | 46.10 / 52.51 | 47.87 / 53.31 |
+| C2 aggregate / per-stream | 74.15 / 43.01 | 71.49 / 40.81 | 79.34 / 45.78 |
+| C3 aggregate / per-stream | 85.75 / 33.60 | 93.21 / 35.81 | 97.00 / 36.96 |
+| **C6 aggregate / per-stream** | 136.76 / 26.17 | 134.31 / 26.01 | **153.33 / 29.30** |
+| 2-stream aggregate (smoke) | 123.0 | — | **144.6** |
+
+**Claimed:** the C6 gain (+12…14 %) — both baseline runs sit below it and C6 is where
+TP=4 all-reduce cost shows. **Not claimed:** C1/C3 (inside noise) and any precise
+prefill percentage. **Unchanged:** single-stream latency — this change only pays off
+under concurrency.
+
+* The switchless build (FujitsuPolycom/sparkring, Apache-2.0) is a prebuilt
+  `libnccl.so.2.30.7` (aarch64, CUDA 13.3, `ncclParamSwitchlessRingOnly`) taken from
+  their GitHub **release asset** — no need to pull their serving image. Config:
+  dual RoCE devices in `NCCL_IB_HCA`, `NCCL_MIN/MAX_NCHANNELS=4`,
+  `NCCL_PROTO=LL,LL128,Simple`, `NCCL_SWITCHLESS_RING_ONLY=1`,
+  `NCCL_P2P_LEVEL=SYS`, `NCCL_CROSS_NIC=1`, `NCCL_IB_MERGE_NICS=0`,
+  `NCCL_CUMEM_ENABLE=0`. With this fabric, other channel counts have produced
+  `ibv_modify_qp` timeouts during NCCL init — `4` is the verified value.
+* **Negative result:** their Engram `BALANCED` + packed-shard path (published at
+  +12…18 % prefill) measured **no gain** here, because their baseline is *raw
+  checkpoint shards, two preads per row*, and this recipe already stages per-rank
+  Engram rows locally — there was no second pread to remove. Check a published
+  optimisation's baseline before adopting it.
 
 ## 7. Reproducing the measurements
 
@@ -437,6 +471,10 @@ Standing on other people's work, clearly stated:
 * **0xTank** — the graph startup-state fix (skip the profiling pass; clear state after
   capture) and the compact output-projection idea. The patch in `patches/` is our
   re-derivation of those changes for the tree we build against.
+* **FujitsuPolycom/sparkring** (Apache-2.0) — the switchless-ring NCCL patch set and
+  the prebuilt `libnccl.so.2.30.7` artifact behind the transport numbers in §6.7, the
+  dual-HCA channel configuration, and their Engram `BALANCED`/packed-shard work (which
+  we report as **not** transferring to this recipe) and soak methodology.
 * **vLLM, FlashInfer, Triton, PyTorch, NVIDIA** and their contributors — the engine,
   kernels and toolchain.
 * **The wider DGX Spark community** publishing quantizations and recipes for this

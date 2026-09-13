@@ -22,6 +22,7 @@ terms this repository applies to its own documentation and scripts.
 | **DeepSeek-V4.1-Flash** (`deepseek-ai/DeepSeek-V4.1-Flash`) | model, checkpoint, draft layers | see the model repository (the upstream card states MIT; DeepSeek's model licence applies to the weights) |
 | **Tech2Wild/Kai** (`tonyd2wild/DeepSeek-V4.1-Flash-vLLM-DGX-Spark`) | foundational four-node DGX Spark recipe: patch set, disk-backed Engram staging, worker-first boot order, image chain, benchmark protocol | see that repository (MIT for its own material) |
 | **0xTank** (`0xTank/DeepSeek-V4.1-Flash-vLLM-4x-GB10-Recipe`) | graph startup-state fix (skip the throwaway graph-memory profiling pass; clear startup state after capture) and the compact output-projection idea | Apache-2.0 / MIT (see that repository's `NOTICE.md`) |
+| **FujitsuPolycom/sparkring** (`FujitsuPolycom/sparkring`) | switchless-ring NCCL patch set and the prebuilt `libnccl.so.2.30.7` artifact referenced by the transport measurements in the results/ notes; dual-HCA channel configuration; Engram `BALANCED`/packed-shard approach (reported there as not transferring to this recipe) | Apache-2.0 |
 | **FlashInfer**, **Triton**, **PyTorch**, **CUDA/cuDNN/NCCL** | kernels, compilation, communication | Apache-2.0 / BSD / NVIDIA EULA respectively |
 
 ## What is ours
@@ -29,6 +30,10 @@ terms this repository applies to its own documentation and scripts.
 * the parameterisation and measured configuration in `README.md` / `README.zh-CN.md`,
 * the `gpu-memory-utilization` → KV-pool measurements and the failure boundary data,
 * the needle / garble / vision-tool validation results,
+* the acceptance-gate protocol and the "baseline measured twice, candidate must beat
+  both runs" rule, the transport A/B numbers, and the KV-pool vs gmu ranges in
+  `results/` (measurements and method — the transport software itself is
+  FujitsuPolycom's, see above),
 * `tools/preflight.sh`, `tools/capture-allnode-logs.sh`, `tools/ctx_decode_bench.py`,
 * the **re-derivation** of the graph startup-state changes for the vLLM tree this
   recipe pins (`patches/gpu_worker_cachefix.py` — the changes themselves are 0xTank's;
