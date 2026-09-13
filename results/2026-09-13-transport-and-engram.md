@@ -142,7 +142,31 @@ someone else the boot cycle.
 
 ---
 
-## 5. Credits
+## 5. Serving telemetry over the public path
+
+Same configuration as §6.7, measured through the deployment's public gateway (one hop
+of TLS + tunnel + proxy in front of the engine), so these are numbers a client actually
+sees rather than engine-side counters:
+
+| what | value | note |
+|---|---:|---|
+| steady-state single-stream decode | **~50–53 tok/s** | engine-side C1 per-stream, repeated runs |
+| single-stream ceiling (fast/counting content) | **~86 tok/s** | best-case category |
+| end-to-end, 700 generated tokens | **~55 tok/s** | public path, includes first-token wait |
+| end-to-end, 273 generated tokens | ~27 tok/s | short outputs are diluted by TTFT — not a decode figure |
+| 2 concurrent streams (aggregate) | **~132 tok/s** | measured live |
+| 6 concurrent streams (aggregate) | **~153 tok/s** | best observed after the transport swap |
+| prefill, 3.5K-token prompt | **~1,960 tok/s** | long-context prefill lands in the 900–1,900 band |
+| first-token latency, short prompt | **~1.4 s** | public path round trip |
+| KV pool at the 1M window | **1,870,320 tokens** | 1.78× the window |
+
+Reading it: **single-stream decode is ~50 tok/s and does not move with the transport
+work**; the transport work shows up as concurrency (2 streams ≈132, 6 streams ≈153).
+Short generations over the public path look slower than the engine number because the
+first token dominates — measure decode with ≥500 generated tokens or read the engine
+side figure.
+
+## 6. Credits
 
 * **FujitsuPolycom/sparkring** (Apache-2.0) — the switchless-ring NCCL patch set,
   the prebuilt `libnccl.so.2.30.7` artifact used here, the dual-HCA channel

@@ -360,6 +360,11 @@ under concurrency.
   Engram rows locally — there was no second pread to remove. Check a published
   optimisation's baseline before adopting it.
 
+Client-visible telemetry for the same configuration (single-stream ~50–53 tok/s,
+2 streams ~132, 6 streams ~153, 700-token end-to-end ~55 tok/s through the public path,
+first token ~1.4 s, KV pool 1,870,320 tokens) is tabulated in section 5 of the results
+note above.
+
 ## 7. Reproducing the measurements
 
 ```bash
