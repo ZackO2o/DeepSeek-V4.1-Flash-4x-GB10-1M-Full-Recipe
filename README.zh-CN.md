@@ -67,6 +67,14 @@ pipeline_tag: text-generation
    **全节点日志抢收集**(赶在下一次起服把证据删掉之前)。
 5. **吞吐与质量成对发布**:性能表旁边必须有 needle / garble / 视觉工具闸门,
    这样"快"就不能脱离"没坏"单独发布。
+6. **重启可存活的前缀缓存,以及一个不再是抽奖的 KV 池**
+   (2026-09-14,[结果文档](results/2026-09-14-kv-prefix-tier-and-pool-pinning.zh-CN.md))。
+   由 **yunwei37/dgx-spark-4-ring-no-switch**(MIT)公开的树外、每节点 NVMe 前缀层,在本配方上
+   对重发的长提示值 ~92 倍 —— 但它的块索引活在进程内存里,于是每次引擎重启都把盘上那些 KV
+   变成孤儿。我们为它加了可持久化索引、`--kv-cache-memory-bytes` 的定容方法(消除逐次起服的
+   池子抽奖,**+23%** 且每次同一个值)、面向统一内存主机的起服内存门,以及 RDMA 对 TCP 的真伪
+   证明。另有一份同代 GB10 配方带来的两条宿主级结论,**在本部署的噪声下没能复现**,我们如实记为
+   "未判定"而不是收益。
 
 ---
 
@@ -325,6 +333,19 @@ vLLM 树写的同名文件。
 同一配置下的**客户端可见遥测**(单流 ~50–53 tok/s、2 路 ~132、6 路 ~153、走公网生成
 700 token ~55 tok/s、首字 ~1.4s、KV 池 1,870,320 tokens)见上面结果文档的第 5 节。
 
+### 6.8 重启可存活的前缀层、池定容,与两条未判定的移植 (2026-09-14)
+
+完整文档:[`results/2026-09-14-kv-prefix-tier-and-pool-pinning.zh-CN.md`](results/2026-09-14-kv-prefix-tier-and-pool-pinning.zh-CN.md)。
+
+| 项 | 实测 |
+|---|---|
+| 92,429-token 提示,**引擎重启后第一个请求** | **0.86 s**(冷 58 s) |
+| 公网路径 20,202-token 提示,重启后首次调用 | 13.6 s → **2.42 s** |
+| KV 池,`--gpu-memory-utilization 0.83` 未定容 | 每次起服 **1.46 M – 2.61 M** tokens |
+| KV 池,钉在 8.5 GiB | **2,706,122 tokens,每次都一样**(+23%) |
+| `vm.compaction_proactiveness=0`(移植宣称 ~10%) | **本机没有这种停顿**(最大间隔 149 ms,>0.5 s 计 0 次) |
+| `--cpuset-cpus=5-9,15-19`(移植宣称 +2–3%) | **在 ±10% 噪声下未判定** |
+
 ## 七、复现测量
 
 ```bash
@@ -339,6 +360,17 @@ python3 tools/ctx_decode_bench.py --base http://127.0.0.1:8888/v1 \
 ```
 
 本仓库 `tools/` 里只有我们自己的脚本:深上下文解码基准、四机 preflight、失败证据收集器。
+```bash
+# 流式探针:吞吐、首块延迟、长解码的停顿分布。
+# 用服务端的 completion_tokens(投机解码下数 SSE 块会少算);噪声底靠重复运行看
+python3 tools/stream_bench.py --base http://127.0.0.1:8888/v1 --conc 1,6 --gap-test 4
+
+# 统一内存主机的起服门:等内存回来 + 驱逐权重的页缓存
+NODES="<IP0> <IP1> <IP2> <IP3>" NEED_GIB=100 bash tools/pool_boot_gate.sh
+
+# 这套部署真的在走 RDMA,还是悄悄退回 TCP?
+NODES="<IP0> <IP1> <IP2> <IP3>" IF_MGMT=<mgmt-if> IF_RING=<ring-if> bash tools/rdma_proof.sh
+```
 
 ---
 
@@ -373,7 +405,15 @@ python3 tools/ctx_decode_bench.py --base http://127.0.0.1:8888/v1 \
    否则可能出现旧 store 占着地址、新组试图在其上会合的情况。
 6. **只信一个吞吐数字。** 深上下文下代码与散文的解码差约 2 倍(投机接受率不同)。两个都要报,
    并且每张吞吐表都必须配一个质量闸门。
-7. **以为模型知道自己被怎么配的。** 问它"你的最大上下文是多少",它可能凭训练数据回答。
+7. **拿单次前后对比声称几个百分点。** 本部署的跑间噪声底是 **±10%**(同样 flag、同样提示,
+   单流解码在 52–68 tok/s 之间;因投机接受率不同,代码题与散文题可差 ~2 倍)。一次前后对比
+   分辨不了 2–3% 的效应 —— 这正是 6.8 里那两条移植结论被记为"未判定"的原因。要在同一时段内
+   **交替**两种配置、多测几对、比中位数。
+8. **数流式块而不是数 token。** 投机解码下服务端每个 SSE 块带多个 token;一个数块的客户端把
+   384 token 的答案数成 95,并在实际 60 tok/s 的栈上报出"14.9 tok/s"。请用
+   `stream_options: {"include_usage": true}`,拿 `completion_tokens` 除以**解码段**墙钟
+   (不是含 prefill 的整段)。
+9. **以为模型知道自己被怎么配的。** 问它"你的最大上下文是多少",它可能凭训练数据回答。
    请从 API 读 `max_model_len`,不要问模型。
 
 ---
@@ -419,6 +459,12 @@ python3 tools/ctx_decode_bench.py --base http://127.0.0.1:8888/v1 \
 * **FujitsuPolycom/sparkring**(Apache-2.0)—— 6.7 节通信数据背后的 switchless-ring NCCL 补丁集
   与预编译 `libnccl.so.2.30.7` 产物、双 HCA 通道配置,以及他们的 Engram `BALANCED`/打包分片工作
   (我们如实记录它**没有**迁移到本配方)与长稳方法论。
+* **yunwei37/dgx-spark-4-ring-no-switch**(MIT)—— 树外、每节点 NVMe KV 前缀层
+  (`dsv41_kv_nvme.py`),本配方的"重启可存活索引"就建在它上面。我们只发布自己加的那一层
+  (`tools/kv_persist_policy.py`);分层本体是他们的,而值 92 倍的那部分也正是它。
+* **bilikaz/qwen38-flash-next-cluster-recipe** —— 一份两节点 GB10 配方,我们把它宿主级的结论
+  拿到本机测了;其中两条如实记为**没能迁移**(6.8 节),而它的起服内存门与 RDMA 证明被我们采用。
+  **在自己硬件上验证别人的结论、并把负结果发布出来**,这件事本身就是重点。
 * **vLLM、FlashInfer、Triton、PyTorch、NVIDIA** 及其贡献者 —— 引擎、内核与工具链。
 * **整个 DGX Spark 社区** —— 持续公开这块硬件上的量化与配方;6.4 节的池子/窗口数据,
   正是因为看到别人的数字后我们开始怀疑自己,才去量的。

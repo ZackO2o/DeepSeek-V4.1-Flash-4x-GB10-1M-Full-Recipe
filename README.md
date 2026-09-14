@@ -78,6 +78,17 @@ this repository contributes:
    that grabs every rank's container log before the next boot destroys it.
 5. **A quality-quantity pairing**: throughput tables *and* needle-in-haystack /
    garble / vision-tool gates, so "fast" cannot be published without "not broken".
+6. **A restart-survivable prefix cache and a KV pool that is not a lottery**
+   (2026-09-14, [results note](results/2026-09-14-kv-prefix-tier-and-pool-pinning.md)).
+   The out-of-tree per-node NVMe prefix tier published by
+   **yunwei37/dgx-spark-4-ring-no-switch** (MIT) is worth ~92x on a resent long prompt
+   here -- but its block index lived in process memory, so every engine restart orphaned
+   the KV still sitting on disk. We add a durable index for it, the sizing rule for
+   `--kv-cache-memory-bytes` that removes the boot-to-boot pool lottery (+23%, and one
+   value every boot), a boot-time memory gate for unified-memory hosts, and an
+   RDMA-versus-TCP proof. Two host-level claims imported from a sibling GB10 recipe did
+   **not** reproduce at this deployment's noise floor and are published as unresolved
+   rather than as wins.
 
 ---
 
@@ -360,6 +371,19 @@ under concurrency.
   Engram rows locally — there was no second pread to remove. Check a published
   optimisation's baseline before adopting it.
 
+### 6.8 Restart-survivable prefix tier, pool pinning, and two unresolved imports (2026-09-14)
+
+Full note: [`results/2026-09-14-kv-prefix-tier-and-pool-pinning.md`](results/2026-09-14-kv-prefix-tier-and-pool-pinning.md).
+
+| what | measured |
+|---|---|
+| 92,429-token prompt, first request **after an engine restart** | **0.86 s** (58 s cold) |
+| 20,202-token prompt over the public path, first call after restart | 13.6 s -> **2.42 s** |
+| KV pool, `--gpu-memory-utilization 0.83` unpinned | 1.46 M - 2.61 M tokens **per boot** |
+| KV pool, pinned at 8.5 GiB | **2,706,122 tokens, every boot** (+23%) |
+| `vm.compaction_proactiveness=0` (imported claim: ~10%) | **no stall exists here** (max gap 149 ms, >0.5 s gaps: 0) |
+| `--cpuset-cpus=5-9,15-19` (imported claim: +2-3%) | **unresolved at a ±10% noise floor** |
+
 Client-visible telemetry for the same configuration (single-stream ~50–53 tok/s,
 2 streams ~132, 6 streams ~153, 700-token end-to-end ~55 tok/s through the public path,
 first token ~1.4 s, KV pool 1,870,320 tokens) is tabulated in section 5 of the results
@@ -382,6 +406,19 @@ python3 tools/ctx_decode_bench.py --base http://127.0.0.1:8888/v1 \
 benchmark, the four-node preflight, and the failure-evidence collector.
 
 ---
+
+```bash
+# streaming probe: throughput, TTFT and long-decode stall distribution.
+# Uses the server's completion_tokens (counting SSE chunks under-counts with
+# speculative decoding) and alternates nothing: run it twice to see the noise floor.
+python3 tools/stream_bench.py --base http://127.0.0.1:8888/v1 --conc 1,6 --gap-test 4
+
+# boot gate on unified-memory hosts: wait for memory, evict the checkpoint page cache
+NODES="<IP0> <IP1> <IP2> <IP3>" NEED_GIB=100 bash tools/pool_boot_gate.sh
+
+# is this deployment really on RDMA, or silently on TCP sockets?
+NODES="<IP0> <IP1> <IP2> <IP3>" IF_MGMT=<mgmt-if> IF_RING=<ring-if> bash tools/rdma_proof.sh
+```
 
 ## 8. Operating the fleet
 
@@ -427,7 +464,18 @@ benchmark, the four-node preflight, and the failure-evidence collector.
 6. **Trusting a single throughput number.** Code and prose decode differ by ~2× at
    depth because speculative acceptance differs. Report both, and pair every
    throughput table with a quality gate.
-7. **Assuming the model knows its own configuration.** Ask it "what is your max
+7. **Claiming a few percent from a single before/after pair.** The run-to-run noise
+   floor here is **±10%** on identical flags and prompts (single-stream decode ranged
+   52-68 tok/s across repeats; code and prose differ ~2x because speculative acceptance
+   differs). A one-shot comparison cannot resolve a 2-3% effect — that is why the two
+   imported claims in §6.8 are published as unresolved. Alternate the two configurations
+   within one session, several pairs, compare medians.
+8. **Counting streamed chunks instead of tokens.** With speculative decoding the server
+   emits several tokens per SSE chunk; a delta-counting client reported a 384-token
+   answer as 95 tokens ("14.9 tok/s" on a stack doing 60). Request
+   `stream_options: {"include_usage": true}` and divide `completion_tokens` by the
+   decode wall time (not by a window that already contains the prefill).
+9. **Assuming the model knows its own configuration.** Ask it "what is your max
    context?" and it may answer from training data. Read `max_model_len` from the API,
    not from the model.
 
@@ -480,6 +528,14 @@ Standing on other people's work, clearly stated:
   the prebuilt `libnccl.so.2.30.7` artifact behind the transport numbers in §6.7, the
   dual-HCA channel configuration, and their Engram `BALANCED`/packed-shard work (which
   we report as **not** transferring to this recipe) and soak methodology.
+* **yunwei37/dgx-spark-4-ring-no-switch** (MIT) — the out-of-tree per-node NVMe KV
+  prefix tier (`dsv41_kv_nvme.py`) that this recipe builds its restart-survivable index
+  on. We publish only the index layer we added (`tools/kv_persist_policy.py`); the tier
+  itself is theirs, and it is the part worth ~92x on a resent long prompt.
+* **bilikaz/qwen38-flash-next-cluster-recipe** — a two-node GB10 recipe whose host-level
+  findings we tested here; two of them are reported as **not transferring** (§6.8), and
+  its boot memory gate and RDMA proof were adopted. Testing a claim on our own hardware,
+  and publishing the negative, is the point.
 * **vLLM, FlashInfer, Triton, PyTorch, NVIDIA** and their contributors — the engine,
   kernels and toolchain.
 * **The wider DGX Spark community** publishing quantizations and recipes for this
