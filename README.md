@@ -311,6 +311,15 @@ Two conclusions we would have got wrong by reasoning instead of measuring:
   difference (≈500 K tokens of KV) was the whole gap. Combined with the graph/patch
   work in §5, this is the difference between "600 K is impossible with vision" and
   "1M with vision works".
+* **`--max-num-batched-tokens` is a second knob on the same wall, and it moved ours
+  further than gmu did.** On a 2-node quantized lane we hit the same `0.80` boundary
+  (preflight short by ~1 GiB); walking gmu down shifted the wall instead of removing
+  it, while raising the batched-token budget from `1024` to `1536` took boot
+  `MemAvailable` from **0.09 GiB to 3.50 GiB** — a *larger* chunk leaving *more*
+  headroom (fewer prefill scheduling rounds, less transient workspace). 1536 is also
+  what a vision tower needs, so on this model family it is not a trade. Measured on a
+  different lane, not reproduced here — see
+  [`results/2026-09-17-two-node-exl3-lane.md`](results/2026-09-17-two-node-exl3-lane.md).
 
 ### 6.5 Decode at context depth (1M window, eager, 1024-token generations)
 
