@@ -318,7 +318,7 @@ Two conclusions we would have got wrong by reasoning instead of measuring:
   `MemAvailable` from **0.09 GiB to 3.50 GiB** — a *larger* chunk leaving *more*
   headroom (fewer prefill scheduling rounds, less transient workspace). 1536 is also
   what a vision tower needs, so on this model family it is not a trade. Measured on a
-  different lane, not reproduced here — see
+  different lane, not reproduced on 4 nodes — see
   [`results/2026-09-17-two-node-exl3-lane.md`](results/2026-09-17-two-node-exl3-lane.md).
 
 ### 6.5 Decode at context depth (1M window, eager, 1024-token generations)
