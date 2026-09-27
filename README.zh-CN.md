@@ -40,6 +40,7 @@ pipeline_tag: text-generation
 | **权重** | 48 个 safetensors 分片,共约 510GB(其中两个约 101GB 的分片是 **Engram** 表) |
 | **硬件** | 4 × GB10 / SM 12.1,128GB 统一内存,TP4 over RoCE |
 | **引擎** | vLLM(`vllm/vllm-openai:nightly-…` 基础镜像)+ **锁定的 Python 树** + 7 个上游补丁 + 1 个我们自己的补丁 |
+| **第二条 lane** | 同一权重、同样四台机器,跑 **SGLang + 无交换机环网**(无 RoCE 交换机):聚合 C1 **104.10** / C8 **245.98** tok/s —— 见 6.9 节 |
 | **上下文** | **1,048,576 tokens**(`--max-model-len 1048576`)—— 实测可用,不是宣传值 |
 | **1M 下同时开启** | ✅ CUDA graphs(`FULL_AND_PIECEWISE`)✅ 视觉(`--limit-mm-per-prompt {"image":4}`)✅ 工具调用 + 推理解析器 ✅ DSpark 投机解码(k=5)✅ 磁盘 Engram + 每节点本地行 |
 | **1M 时的 KV 池** | **1,716,692 tokens = 1M 请求的 1.64 倍**(gmu 0.83) |
@@ -84,13 +85,25 @@ pipeline_tag: text-generation
 |---|---|
 | 节点 | 4 × GB10(`SM 12.1`),每台 128GB 统一内存 |
 | 互联 | 直连 RoCE 环,逐链路点对点,每链路 `/30`,MTU 9000 |
-| NCCL | `NCCL_IB_HCA` 指向 RoCE HCA,`NCCL_IB_GID_INDEX=3`,`NCCL_NET=IB`,RoCE v2 |
+| NCCL | `NCCL_IB_HCA` 指向 RoCE HCA,`NCCL_IB_GID_INDEX` = 真正承载环网 IPv4 的 RoCEv2 GID 下标(**我们记录到的是 3** —— **任何硬件事件后都要重新探测**,见下),`NCCL_NET=IB`,RoCE v2 |
 | 管理网 | 仅用于 `--master-addr` 会合与权重/NFS 的流量控制 |
 
 两条用代价换来的经验:
 
 * **要用的每个口,GID index 3 必须非零。** 若某口的 GID 全为零,NCCL 会以 `errno 61` /
   `ibv_modify_qp` 超时失败。重新初始化(或冷断电)可以恢复。
+* **GID 下标不是常量 —— 碰过硬件就要重新探测。** 我们重新插拔了一条环网线之后,承载环网 IPv4
+  地址的下标在四台机器上都从 **3 挪到了 4**;配置一个字没改,起服门报
+  *"no common IPv4 RoCE v2 GID"*,直到更新环境变量才通过。请把它当"当前设备状态的属性",
+  而不是"你配置里的常量"。
+* **环网起服不稳时,采样网卡的 `carrier`,不要只看 IB 端口状态。** 一条间歇性链路的 IB 端口
+  可以一直读 `4 (ACTIVE)`,而同一物理口的 carrier 每隔几秒掉到 0。上游症状:约 1,300 条
+  `Got non-fatal async event` 告警、`ibv_modify_qp` 超时、以及在集合通信建立阶段就死掉的启动。
+  一次读数什么都证明不了 —— 要反复采样。**价值说实话:** 重新插拔把告警清到零,
+  但解码 tok/s 一点没变;它拆掉的是一颗地雷,不是多出来的吞吐。
+* **软挂载会把挂载检查骗过去。** `mountpoint` 报告权重"已挂载",而对它 `ls` 会永久阻塞,
+  随后起服报 *"weights missing/incomplete"*。正确做法是在 `timeout` 里**数 checkpoint 分片**
+(本 checkpoint 是 48 片),而不是问某个路径是不是挂载点。`tools/post_reseat_recover.sh` 就是这个。
 * **权重走高速 fabric,别走管理网。** 510GB 权重通过 1GbE 管理网读取要数小时,走 RoCE 环是几分钟。
   我们的布局里,头机只读导出权重,每台 worker 另外保留**自己那份节点本地 Engram 行**(见第五节)。
 
@@ -346,6 +359,34 @@ vLLM 树写的同名文件。
 | `vm.compaction_proactiveness=0`(移植宣称 ~10%) | **本机没有这种停顿**(最大间隔 149 ms,>0.5 s 计 0 次) |
 | `--cpuset-cpus=5-9,15-19`(移植宣称 +2–3%) | **在 ±10% 噪声下未判定** |
 
+### 6.9 第二条 lane:无交换机环网 TP4,跑在 SGLang 上(2026-09-28)
+
+本 README 里的配置跑在 **vLLM** 上。我们也在同样四台机器上、用 **SGLang + 无交换机环网**
+(没有 RoCE 交换机)服务同一个权重 —— 环网传输层的实践都在那条 lane 上。完整文档:
+[`results/2026-09-28-sglang-switchless-ring-tp4.zh-CN.md`](results/2026-09-28-sglang-switchless-ring-tp4.zh-CN.md)。
+
+| 并发 | 本 README 的 lane(vLLM,`bench/v41bench.py`) | SGLang 环网 lane,聚合 tok/s(上游 harness) | TTFT |
+|---|---:|---:|---:|
+| 1 | 混合 50.9 / code 67.7 | **104.10** | 0.301 s |
+| 2 | — | **147.56** | 0.409 s |
+| 4 | — | **190.00** | 0.455 s |
+| 8 | 125(C6) | **245.98** | 0.518 s |
+
+两列来自**不同的 harness**,所以这组对照读作"两个引擎各自的代价与收益",不是 A/B。
+真正的同口径对照是:环网 lane 用**上游项目自己的 harness(未做任何修改)**测得,
+与该项目**发布的环网数据**相比,聚合在 C1/C2/C4/C8 上分别 **+41 % / +32 % / +19 % / +9 %**
+(104.10 对 74.03;C8 245.98 对 224.84)。让这个结论站得住的那些限定条件都写在文档里 ——
+检出版本不同(chunk 1024 对 4096、8 对 16 并发)、时钟策略不同(2,177–2,190 MHz 对
+2,392–2,398 MHz)、物理环不同,以及他们的 TTFT 列来自旧版按字符缩放的估计器 ——
+这也正是我们只对**聚合列**下结论的原因。同一篇文档还带了一张跨项目参考表
+([`results/2026-09-28-cross-project-4x-gb10-reference.zh-CN.md`](results/2026-09-28-cross-project-4x-gb10-reference.zh-CN.md)),
+其中如实记录了一份来自别家项目的"环网优化 NCCL 构建"**没有迁移过来**。
+
+那条 lane 上有一个与引擎无关、可迁移的数字:KV 池的**定容值**不等于**实配值**。
+定容 `8,000,000` token、`DSV41_CACHE_GIB=4` 时实配 2,977,536;改成 `0` 后实配
+**3,253,248(+9 %)**,并多留约 1.5 GiB 主机余量 —— 在 GB10 上 host 内存就是显存,
+行缓存的价值不如它占掉的那点余量。
+
 ## 七、复现测量
 
 ```bash
@@ -465,6 +506,17 @@ NODES="<IP0> <IP1> <IP2> <IP3>" IF_MGMT=<mgmt-if> IF_RING=<ring-if> bash tools/r
 * **bilikaz/qwen38-flash-next-cluster-recipe** —— 一份两节点 GB10 配方,我们把它宿主级的结论
   拿到本机测了;其中两条如实记为**没能迁移**(6.8 节),而它的起服内存门与 RDMA 证明被我们采用。
   **在自己硬件上验证别人的结论、并把负结果发布出来**,这件事本身就是重点。
+* **MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks**(其自有材料为 MIT,保留上游 MIT 声明) —— 我们
+  启动配置所依据的 TP4 配方与参数集、无交换机环网档,以及 6.9 节里**原样未改**使用的
+  `benchmarks/decode_window.py`。他们发布的环网数字就是那里的"对照列"。
+* **knapcio(majewskizby)** —— `canary-roce` 四机 Spark 生产线(对上述仓库的 PR #36,以及
+  建于其上的 AGPL-3.0 fork):RoCEnante 镜像、EP 1 + b12x 上的 routed MoE、prefill sequence
+  parallel、快速加载器与受门控的 decode 适配器。我们的环网 lane 跑的就是这套档;
+  **本仓未内嵌其中任何代码。**
+* **SGLang** 及其贡献者 —— 环网 lane 的引擎。
+* **luxingcom(LuZ)**、**nero-**、**ChrisLou-bioinfo**、**ntxf31415** 等公开的 4 × GB10 项目 ——
+  它们的配置与数字连同署名、明确的方法学限定,汇总在
+  `results/2026-09-28-cross-project-4x-gb10-reference.zh-CN.md`。
 * **vLLM、FlashInfer、Triton、PyTorch、NVIDIA** 及其贡献者 —— 引擎、内核与工具链。
 * **整个 DGX Spark 社区** —— 持续公开这块硬件上的量化与配方;6.4 节的池子/窗口数据,
   正是因为看到别人的数字后我们开始怀疑自己,才去量的。

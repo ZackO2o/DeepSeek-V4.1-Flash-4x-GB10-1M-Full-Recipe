@@ -52,6 +52,24 @@ terms this repository applies to its own documentation and scripts.
   recipe pins (`patches/gpu_worker_cachefix.py` — the changes themselves are 0xTank's;
   the derivation is ours and is documented in `patches/README.md`).
 
+## Configuration lineage (added 2026-09-28)
+
+The SGLang switchless-ring lane documented in `results/2026-09-28-sglang-switchless-ring-tp4.md`
+is a **configuration** derived from other projects' work. No code from them is vendored here:
+
+* `MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks` — MIT for its own material (upstream MIT notice
+  retained). Source of the TP4 recipe, the parameter set and the `decode_window.py` harness.
+* `knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4` — **AGPL-3.0** (builds on the repository above);
+  author of the `canary-roce` production profile our ring lane runs. We publish configuration
+  values and measurements only; if you want their code, take it from them under their licence.
+* `FujitsuPolycom/sparkring` — Apache-2.0, the switchless-ring NCCL patch set (already credited
+  above).
+* `luxingcom (LuZ)`, `nero-`, `ChrisLou-bioinfo`, `ntxf31415`, `yunwei37` — quoted as *published
+  numbers* in the cross-project reference note, with their own methods and licences.
+
+The two scripts added in `tools/` (`ring_link_health.sh`, `post_reseat_recover.sh`) are our own
+MIT work and contain no third-party code.
+
 ## No secrets, no weights
 
 This repository contains no credentials, no private addresses, no hostnames, no

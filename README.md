@@ -43,6 +43,7 @@ our own hardware; nothing is extrapolated from a single node.
 | **Checkpoint** | 48 safetensors shards, ~510 GB total (two ~101 GB shards are the **Engram** tables) |
 | **Hardware** | 4 × GB10 / SM 12.1, 128 GB unified memory, TP4 over RoCE |
 | **Engine** | vLLM (`vllm/vllm-openai:nightly-...` base) + a **pinned Python tree** + 7 upstream patch files + 1 patch of ours |
+| **Second lane** | Same checkpoint, same four nodes on **SGLang over a switchless ring** (no RoCE switch): C1 **104.10** / C8 **245.98** tok/s aggregate — see [§6.9](#69-a-second-lane-switchless-ring-tp4-on-sglang-2026-09-28) |
 | **Context** | **1,048,576 tokens** (`--max-model-len 1048576`) — measured, not aspirational |
 | **Features at 1M** | ✅ CUDA graphs (`FULL_AND_PIECEWISE`) ✅ vision (`--limit-mm-per-prompt {"image":4}`) ✅ tool calling + reasoning parser ✅ DSpark spec decode (k=5) ✅ disk-backed Engram with node-local rows |
 | **KV pool at 1M** | **1,716,692 tokens = 1.64× a 1M request** (gmu 0.83) |
@@ -98,7 +99,7 @@ this repository contributes:
 |---|---|
 | Nodes | 4 × GB10 (`SM 12.1`), 128 GB unified memory each |
 | Interconnect | direct RoCE ring, point-to-point links, `/30` per link, MTU 9000 |
-| NCCL | `NCCL_IB_HCA` = the RoCE HCA, `NCCL_IB_GID_INDEX=3`, `NCCL_NET=IB`, RoCE v2 |
+| NCCL | `NCCL_IB_HCA` = the RoCE HCA, `NCCL_IB_GID_INDEX` = whichever index carries the ring IPv4 as a RoCEv2 GID (**3** in our recordings — **re-detect it after any hardware event**, see below), `NCCL_NET=IB`, RoCE v2 |
 | Management link | used for `--master-addr` rendezvous and weight/NFS traffic control |
 
 Two things we learned the hard way:
@@ -106,6 +107,21 @@ Two things we learned the hard way:
 * **GID index 3 must be non-zero** on every port you intend to use. A port that
   enumerates GIDs full of zeros will fail NCCL with `errno 61` / `ibv_modify_qp`
   timeouts. Re-plugging/re-initialising the interface (or a cold power cycle) fixes it.
+* **The GID index is not a constant — re-detect it after touching the hardware.** After we
+  re-seated one ring cable, the index carrying the ring IPv4 address moved from **3 to 4** on
+  all four nodes; the config had not changed by one character and the boot gate failed with
+  *"no common IPv4 RoCE v2 GID"* until the environment was updated. Treat it as a property of
+  the current device state, not of your configuration.
+* **When a ring boot is flaky, sample the NIC `carrier`, not the IB port state.** An
+  intermittent link can read `4 (ACTIVE)` on the IB port while carrier drops to 0 every few
+  seconds. Upstream symptoms: ~1,300 `Got non-fatal async event` warnings, `ibv_modify_qp`
+  timeouts, and boots that die in collective setup. One reading proves nothing — sample
+  repeatedly. **Honest value:** re-seating the cable took our warnings to zero and did not
+  move decode tok/s at all; it removed a landmine, it did not add throughput.
+* **A soft weight mount can decoy a mount check.** `mountpoint` reported the weights
+  "mounted" while `ls` on the directory blocked forever, and the boot failed with *"weights
+  missing/incomplete"*. Count the checkpoint shards (48) behind a `timeout`, never ask whether
+  a path is a mount point. `tools/post_reseat_recover.sh` does exactly this.
 * **Serve weights over the fast fabric, not the management network.** Reading a 510 GB
   checkpoint through a 1 GbE management link takes hours; the same read over the
   RoCE ring is minutes. In our layout the head exports the checkpoint and each worker
@@ -398,6 +414,38 @@ Client-visible telemetry for the same configuration (single-stream ~50–53 tok/
 first token ~1.4 s, KV pool 1,870,320 tokens) is tabulated in section 5 of the results
 note above.
 
+### 6.9 A second lane: switchless-ring TP4 on SGLang (2026-09-28)
+
+The configuration in this README runs on **vLLM**. We also serve the same checkpoint on the same
+four nodes with **SGLang on a switchless ring** (no RoCE switch), which is where the ring
+transport work lives. Full note:
+[`results/2026-09-28-sglang-switchless-ring-tp4.md`](results/2026-09-28-sglang-switchless-ring-tp4.md).
+
+| C | This README's lane (vLLM, `bench/v41bench.py`) | SGLang ring lane, aggregate tok/s (upstream harness) | TTFT |
+|---|---:|---:|---:|
+| 1 | 50.9 mixed / 67.7 coding | **104.10** | 0.301 s |
+| 2 | — | **147.56** | 0.409 s |
+| 4 | — | **190.00** | 0.455 s |
+| 8 | 125 (C6) | **245.98** | 0.518 s |
+
+The two columns come from **different harnesses**, so read the pair as "what the two engines
+cost and gain", not as an A/B. The like-for-like comparison is the ring lane against the
+upstream project's *published ring numbers*, measured with **their own harness, unmodified**:
+**+41 % / +32 % / +19 % / +9 %** aggregate at C1/C2/C4/C8 (104.10 vs 74.03 at C1; 245.98 vs
+224.84 at C8). The caveats that keep that honest are in the note — different checkout
+(chunk 1024 vs 4096, 8 vs 16 running requests), different clock policy (2,177–2,190 MHz vs
+2,392–2,398 MHz), a different physical ring, and a legacy character-scaled estimator behind
+their TTFT column, which is why only the aggregate column is claimed. The same note carries a
+cross-project reference table of the other public 4 × GB10 rings
+([`results/2026-09-28-cross-project-4x-gb10-reference.md`](results/2026-09-28-cross-project-4x-gb10-reference.md)),
+including the ring-optimised NCCL build from one of those projects that **did not transfer** to
+our lane.
+
+One transferable number from that lane, engine-independent: the KV pool's **pinned** value is not
+its **allocated** value. Pinning `8,000,000` tokens with `DSV41_CACHE_GIB=4` allocated 2,977,536;
+setting it to `0` allocated **3,253,248 (+9 %)** and left ~1.5 GiB more host headroom — on a GB10,
+host RAM *is* GPU memory, so a row cache is worth less than the headroom it costs.
+
 ## 7. Reproducing the measurements
 
 ```bash
@@ -545,6 +593,18 @@ Standing on other people's work, clearly stated:
   findings we tested here; two of them are reported as **not transferring** (§6.8), and
   its boot memory gate and RDMA proof were adopted. Testing a claim on our own hardware,
   and publishing the negative, is the point.
+* **MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks** (MIT for their own material, upstream MIT
+  notice retained) — the TP4 recipe and parameter set our launch configuration derives from,
+  the switchless-ring profile, and the `benchmarks/decode_window.py` harness used **unmodified**
+  for §6.9. Their published ring numbers are the "before" column there.
+* **knapcio (majewskizby)** — the `canary-roce` four-Spark production line (PR #36 against the
+  repository above and the AGPL-3.0 fork that builds on it): the RoCEnante image, EP 1 with the
+  routed MoE on b12x, prefill sequence parallel, the fast loader and the gated decode adapters.
+  Our ring lane runs that profile; **no code from it is vendored here**.
+* **SGLang** and its contributors — the engine behind the ring lane.
+* **luxingcom (LuZ)**, **nero-**, **ChrisLou-bioinfo**, **ntxf31415** and the other public
+  4 × GB10 projects — their published configurations and numbers are collected with attribution
+  and explicit method caveats in `results/2026-09-28-cross-project-4x-gb10-reference.md`.
 * **vLLM, FlashInfer, Triton, PyTorch, NVIDIA** and their contributors — the engine,
   kernels and toolchain.
 * **The wider DGX Spark community** publishing quantizations and recipes for this
