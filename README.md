@@ -428,6 +428,13 @@ transport work lives. Full note:
 | 4 | — | **190.00** | 0.455 s |
 | 8 | 125 (C6) | **245.98** | 0.518 s |
 
+**Prefill on the same lane and configuration** (TTFT-based, high-entropy filler): peak **~4,700 tok/s**
+at 16k–64k, 4,077 at 261k, and 3,222 at 818,377 tokens (TTFT 254 s) — no cliff through 800k. A fully
+cached 130,831-token prefix repeats in 0.51 s instead of 28.8 s. Note the direction: the upstream ring
+profile publishes 5,393–5,567 tok/s at 16k–128k, so **prefill is where this lane is behind, unlike
+decode**. Table and method: [§3b of the note](results/2026-09-28-sglang-switchless-ring-tp4.md).
+
+
 The two columns come from **different harnesses**, so read the pair as "what the two engines
 cost and gain", not as an A/B. The like-for-like comparison is the ring lane against the
 upstream project's *published ring numbers*, measured with **their own harness, unmodified**:

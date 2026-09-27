@@ -93,6 +93,44 @@ architectural superiority:
    only strictly comparable one**, because both sides derive it from the server's final
    token usage.
 
+## 3b. Cold prefill
+
+Method: one request per size, a unique nonce per request (nothing cacheable), streaming,
+`max_tokens=1` so the wall time is prefill plus one decode step; tok/s = the **server-reported**
+`prompt_tokens` / TTFT. The filler is **high-entropy random words** — every token hashes to a
+different Engram row — deliberately *not* the single-token synthetic filler some prefill tables use,
+which on a `DSV41_CACHE_GIB=0` host mostly measures the row store rather than prefill (see §4).
+
+| prompt tokens | TTFT | prefill tok/s |
+|---:|---:|---:|
+| 4,159 | 1.11 s | 3,732 |
+| 16,327 | 3.53 s | 4,629 |
+| 32,709 | 7.03 s | 4,656 |
+| 65,176 | 13.91 s | 4,685 |
+| 130,913 | 29.74 s | 4,402 |
+| 261,416 | 64.11 s | 4,077 |
+
+Peak is **~4,700 tok/s** in the 16k–64k band, and the curve is still flat where it matters: a longer
+ladder on the same configuration measured 408,462 tokens in 109.1 s (**3,744 tok/s**) and
+**818,377 tokens in 254.0 s (3,222 tok/s)** — no cliff through 800k tokens.
+
+**A repeat-filler control** on the same configuration, at 25,250 and 100,868 tokens, read **5,041 and
+5,054 tok/s** — the single-token filler is ~7 % *faster* here than the high-entropy one. That is a
+different axis from the upstream report that motivated this method (they compared the *cache setting*
+on the filler, where the filler was slow only with the cache off), so we record it as an observation
+rather than a contradiction; repeated tokens also make the attention path degenerate.
+
+**Where this lane sits.** The upstream project publishes **5,393–5,567 tok/s at 16k–128k and 4,971 at
+262k** for its *ring* profile, measured with its own loader and its single-token filler. Our numbers are
+about **15 % below** that (and ~7–9 % below it if read through our repeat-filler control) — the
+**opposite direction from decode**, where this lane is ahead of the same project's ring figures. Our
+numbers are TTFT-based from a local API client rather than their loader, so treat this as a lead rather
+than a verdict: prefill is the first thing worth tuning on this lane, and the ring's large-prefill
+collectives are where the upstream project says the fabric cost lands.
+
+**Prefix cache, same lane:** repeating the identical 130,831-token request takes **0.51 s instead of
+28.8 s** — a 56× TTFT reduction on a fully cached prefix.
+
 ## 4. KV pool: the pinned value is not the allocated value
 
 `MAX_TOTAL_TOKENS` is pinned at `8,000,000`, but what the engine actually allocates
