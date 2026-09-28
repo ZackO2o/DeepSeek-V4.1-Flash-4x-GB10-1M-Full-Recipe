@@ -1,5 +1,11 @@
 # 2026-09-28 — a switchless-ring TP4 lane for DeepSeek-V4.1-Flash (SGLang), measured against the upstream ring numbers
 
+> **Before quoting any single-stream number in this file:** C1 >100 tok/s reproduces only on an idle
+> engine, thinking off, with a long (~3.2k-token) generated answer. Same box and harness: a ~1k-token
+> answer reads 86, thinking on reads 71, and long-context *end-to-end* (prompt + answer / wall clock)
+> reads 14-49 at 131k-262k. Boundary table at the end of this file.
+
+
 A second lane, same fleet class, **different engine**: SGLang's 1M TP4 profile on a
 **switchless 4-node ring** (no RoCE switch — four GB10 nodes wired point to point).
 This note publishes what we measured on it, how it compares with the ring numbers
