@@ -231,3 +231,31 @@ Serving `deepseek-v4.1-flash` at 1,048,576 context over the ring, KV pool 3,253,
 tokens, zero NCCL warnings across the last boots, decode as tabulated in §2
 (reproduced twice). Vision, tool calling and the reasoning parser are live on the same
 process; the ring change touches transport only.
+
+---
+
+## What the single-stream number does and does not cover
+
+Every C1 figure above was measured on an **idle** engine, thinking off, greedy, with a **long**
+generated answer (~3.2k tokens). That is the only condition in which single-stream >100 tok/s
+reproduces. Same box, same harness, same day, other conditions (token counts taken from the server's
+`usage`, so they are exact — not character estimates):
+
+| condition (all C1 unless stated) | client-observed tok/s |
+|---|---|
+| idle, thinking off, ~3.2k-token answer (`decode_window.py`) | **103.9** |
+| idle, thinking off, ~1k-token answer | 86.0 - 87.5 |
+| idle, thinking **on** (the model's own default) | 71.3 |
+| idle, ~32k prompt, 1k-token answer, decode only | 101.4 |
+| idle, ~131k prompt, decode only | 64.6 |
+| idle, ~262k prompt, decode only | 85.7 |
+| ~131k prompt, end-to-end (prompt + answer / wall clock) | 19.1 |
+| ~262k prompt, end-to-end | 14.1 |
+| C8 aggregate, short prompt | 258.9 - 296.3 |
+
+Read across those rows and the apparent disagreements between projects disappear: a short chat reply
+reads ~86, a long-context turn reads 60-101 as pure decode but 14-49 once you count the prompt, and
+the aggregate climbs to ~260 at C8. **Do not quote C1 104 as an any-condition throughput** — the same
+harness re-run on 2026-09-28 read 103.87 and 100.0 for the 129-641 window, which is what makes the
+number reproducible, but only under row 1. Contended engines and thinking-on clients see less, and
+that is expected, not a defect.

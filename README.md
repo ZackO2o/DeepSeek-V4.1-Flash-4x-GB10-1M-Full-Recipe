@@ -44,6 +44,7 @@ our own hardware; nothing is extrapolated from a single node.
 | **Hardware** | 4 × GB10 / SM 12.1, 128 GB unified memory, TP4 over RoCE |
 | **Engine** | vLLM (`vllm/vllm-openai:nightly-...` base) + a **pinned Python tree** + 7 upstream patch files + 1 patch of ours |
 | **Second lane** | Same checkpoint, same four nodes on **SGLang over a switchless ring** (no RoCE switch): C1 **104.10** / C8 **245.98** tok/s aggregate — see [§6.9](#69-a-second-lane-switchless-ring-tp4-on-sglang-2026-09-28) |
+| **C1 caveat** | Single-stream >100 tok/s holds **only** for a long answer on an idle engine with thinking off: a short reply reads ~86, thinking on ~71, long-context *end-to-end* (prompt + answer) 14-49, C8 aggregate ~260. Measured boundary table in the ring lane note |
 | **Context** | **1,048,576 tokens** (`--max-model-len 1048576`) — measured, not aspirational |
 | **Features at 1M** | ✅ CUDA graphs (`FULL_AND_PIECEWISE`) ✅ vision (`--limit-mm-per-prompt {"image":4}`) ✅ tool calling + reasoning parser ✅ DSpark spec decode (k=5) ✅ disk-backed Engram with node-local rows |
 | **KV pool at 1M** | **1,716,692 tokens = 1.64× a 1M request** (gmu 0.83) |
