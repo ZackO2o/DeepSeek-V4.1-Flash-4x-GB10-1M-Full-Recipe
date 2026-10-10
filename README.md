@@ -435,6 +435,10 @@ cached 130,831-token prefix repeats in 0.51 s instead of 28.8 s. Note the direct
 profile publishes 5,393–5,567 tok/s at 16k–128k, so **prefill is where this lane is behind, unlike
 decode**. Table and method: [§3b of the note](results/2026-09-28-sglang-switchless-ring-tp4.md).
 
+A second fleet ran the same SGLang lane with all four RDMA functions and RoCEnante over sparkring's
+opposite-node mesh (C1 ~129 tok/s, qeval 72/75, 131k cold in 24 s) and re-measured `DSV41_CACHE_GIB=0`:
+[`results/2026-10-10-sglang-ring-4hca-rocenante.md`](results/2026-10-10-sglang-ring-4hca-rocenante.md) (contributed).
+
 
 The two columns come from **different harnesses**, so read the pair as "what the two engines
 cost and gain", not as an A/B. The like-for-like comparison is the ring lane against the
